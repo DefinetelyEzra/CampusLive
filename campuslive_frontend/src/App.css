@@ -1,0 +1,26 @@
+/* Ensure smooth transitions across the app */
+* {
+  box-sizing: border-box;
+}
+
+/* Custom app-wide utilities */
+.app-container {
+  @apply min-h-screen w-full;
+}
+
+.app-content {
+  @apply flex flex-col min-h-screen;
+}
+
+/* Override any default button styles */
+button {
+  font-family: inherit;
+  border: none;
+  background: none;
+  cursor: pointer;
+}
+
+/* Override any default input styles */
+input, select, textarea {
+  font-family: inherit;
+}

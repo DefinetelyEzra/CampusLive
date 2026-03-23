@@ -1,0 +1,207 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                     String             @id @default(cuid())
+  email                  String             @unique
+  username               String             @unique
+  password               String
+  role                   UserRole           @default(STUDENT)
+  createdAt              DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
+  participants           EventParticipant[]
+  moderatedEvents        Event[]            @relation("EventLiveModerator")
+  organizedEvents        Event[]
+  media                  Media[]
+  moderatorTokensCreated ModeratorToken[]   @relation("ModeratorTokensCreated")
+  moderatorTokenUsed     ModeratorToken?    @relation("ModeratorTokenUsedBy")
+  posts                  Post[]
+  userRoles              UserAppRole[]
+
+  @@map("users")
+}
+
+model Location {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  latitude    Float
+  longitude   Float
+  category    String
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  events      Event[]
+  posts       Post[]
+
+  @@map("locations")
+}
+
+model Post {
+  id         String     @id @default(cuid())
+  content    String?
+  mediaUrl   String?
+  mediaType  MediaType?
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+  userId     String
+  locationId String
+  eventId    String?
+  event      Event?     @relation(fields: [eventId], references: [id])
+  location   Location   @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("posts")
+}
+
+model Event {
+  id             String      @id @default(cuid())
+  title          String
+  description    String?
+  startTime      DateTime
+  endTime        DateTime?
+  isLive         Boolean     @default(false)
+  status         EventStatus @default(UPCOMING)
+  maxAttendees   Int?
+  totalAttendees Int         @default(0)
+
+  // Advanced options
+  isPrivate      Boolean         @default(false)
+  accessKey      String?
+  isRecurring    Boolean         @default(false)
+  recurrenceType RecurrenceType?
+  parentEventId  String? // For recurring events
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  organizerId     String
+  locationId      String
+  liveModeratorId String?
+  liveStartedAt   DateTime?
+
+  participants  EventParticipant[]
+  liveModerator User?              @relation("EventLiveModerator", fields: [liveModeratorId], references: [id])
+  location      Location           @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  organizer     User               @relation(fields: [organizerId], references: [id], onDelete: Cascade)
+  parentEvent   Event?             @relation("RecurringEvents", fields: [parentEventId], references: [id])
+  childEvents   Event[]            @relation("RecurringEvents")
+
+  LocationBound LocationBound?
+  Media         Media[]
+  posts         Post[]
+
+  @@map("events")
+}
+
+model UserAppRole {
+  id               String          @id @default(cuid())
+  userId           String
+  roleType         RoleType
+  moderatorTokenId String?
+  createdAt        DateTime        @default(now())
+  expiresAt        DateTime?
+  moderatorToken   ModeratorToken? @relation(fields: [moderatorTokenId], references: [id])
+  user             User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, roleType])
+  @@map("user_roles")
+}
+
+model ModeratorToken {
+  id           String        @id @default(cuid())
+  token        String        @unique
+  createdById  String
+  isUsed       Boolean       @default(false)
+  usedByUserId String?       @unique
+  expiresAt    DateTime
+  createdAt    DateTime      @default(now())
+  createdBy    User          @relation("ModeratorTokensCreated", fields: [createdById], references: [id], onDelete: Cascade)
+  usedByUser   User?         @relation("ModeratorTokenUsedBy", fields: [usedByUserId], references: [id])
+  UserAppRole  UserAppRole[]
+
+  @@map("moderator_tokens")
+}
+
+model EventParticipant {
+  id                String          @id @default(cuid())
+  eventId           String
+  userId            String
+  role              ParticipantRole
+  joinedAt          DateTime        @default(now())
+  leftAt            DateTime?
+  isActive          Boolean         @default(true)
+  lastLocationCheck DateTime?
+  event             Event           @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user              User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, userId])
+  @@map("event_participants")
+}
+
+model LocationBound {
+  id           String @id @default(cuid())
+  eventId      String @unique
+  centerLat    Float
+  centerLng    Float
+  radiusMeters Int    @default(100)
+  event        Event  @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@map("location_bounds")
+}
+
+model Media {
+  id            String    @id @default(cuid())
+  eventId       String
+  userId        String
+  storagePath   String
+  mediaType     MediaType
+  thumbnailPath String?
+  durationSecs  Int?
+  uploadedAt    DateTime  @default(now())
+  event         Event     @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("media")
+}
+
+enum UserRole {
+  STUDENT
+  FACULTY
+  ADMIN
+}
+
+enum MediaType {
+  IMAGE
+  VIDEO
+}
+
+enum EventStatus {
+  UPCOMING
+  LIVE
+  ENDED
+  CANCELLED
+}
+
+enum RoleType {
+  MODERATOR
+  POSTER
+  WATCHER
+}
+
+enum ParticipantRole {
+  MODERATOR
+  POSTER
+  WATCHER
+}
+
+enum RecurrenceType {
+  DAILY
+  WEEKLY
+  MONTHLY
+}
