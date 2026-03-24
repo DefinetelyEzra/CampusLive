@@ -40,7 +40,7 @@ Built with **React 19** and **Vite**, the application provides a dynamic mapping
 
 ---
 
-## 🛠 Tech Stack
+## Tech Stack
 
 | Category        | Technology            |
 |----------------|----------------------|
@@ -101,7 +101,7 @@ npm run dev
 
 ---
 
-## 🛠 Available Scripts
+## Available Scripts
 
 - `npm run dev` — Start the development server  
 - `npm run build` — Build for production (includes type checking)  
