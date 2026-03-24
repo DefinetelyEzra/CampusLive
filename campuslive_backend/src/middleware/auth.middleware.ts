@@ -51,7 +51,7 @@ export const requireRole = (roles: string[]) => {
 export const restrictAdminCreation = (req: Request, res: Response, next: NextFunction) => {
   const { role } = req.body;
 
-  if (role === 'ADMIN' && (!req.user || req.user.role !== 'ADMIN')) {
+  if (role === 'ADMIN' && (req.user?.role !== 'ADMIN')) {
     return sendError(res, 'Only admins can create admin users', undefined, 403);
   }
 
