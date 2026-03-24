@@ -77,8 +77,8 @@ src/
 
 ### 1. Installation
 ```bash
-git clone <your-repo-url>
-cd CAMPUSLIVE_FRONTEND
+git clone https://github.com/DefinetelyEzra/CampusLive.git
+cd campuslive_frontend
 npm install
 ```
 
