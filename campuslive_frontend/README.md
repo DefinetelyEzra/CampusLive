@@ -69,7 +69,7 @@ src/
 
 ---
 
-## ⚙️ Setup & Installation
+## Setup & Installation
 
 ### Prerequisites
 - Node.js (v18+ recommended)
@@ -110,7 +110,7 @@ npm run dev
 
 ---
 
-## 🔒 Security & Architecture
+## Security & Architecture
 
 - **Error Boundaries**  
   Prevents app-wide crashes by catching component-level errors  
@@ -123,7 +123,7 @@ npm run dev
 
 ---
 
-## 🌐 Deployment
+## Deployment
 
 CampusLive frontend is a static site and can be hosted on:
 - Vercel  
@@ -199,6 +199,6 @@ This project is licensed under the MIT License.
 
 ---
 
-## 🛡️ Maintainers
+## Maintainers
 
-- Agunbiade Odunayo / Org — Initial Work
+- Agunbiade Odunayo — Initial Work
