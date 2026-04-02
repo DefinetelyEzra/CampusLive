@@ -4,6 +4,8 @@ import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate } from 'r
 import { useAuthStore } from './stores/authStore';
 import Login from './components/User/Login';
 import Register from './components/User/Register';
+import ForgotPassword from './components/User/ForgotPassword';
+import ResetPassword from './components/User/ResetPassword'; 
 import CampusMap from './components/Map/CampusMap';
 import LoadingScreen from './components/LoadingScreen';
 import './App.css';
@@ -39,34 +41,28 @@ const AppRoutes: React.FC = () => {
 
   const handleSwitchToRegister = () => navigate('/register');
   const handleSwitchToLogin = () => navigate('/login');
+  const handleForgotPassword = () => navigate('/forgot-password');  // ← NEW
 
   useEffect(() => {
     apiService.setUnauthorizedHandler(() => {
       useAuthStore.getState().logout();
-
-      // show friendly toast
       try {
         showToast('Session expired. Please sign in again.', 'error', 6000);
       } catch { /* ignore if toast not ready */ }
-
-      // client-side navigate
       navigate('/login');
     });
 
-    // cleanup on unmount
     return () => {
       apiService.setUnauthorizedHandler();
     };
   }, [navigate, showToast]);
 
-  // Request notification permission when user logs in
   useEffect(() => {
     if (isAuthenticated && !hasPermission) {
-      // Delay request slightly to avoid overwhelming user on login
       const timer = setTimeout(() => {
         requestPermission().then(granted => {
           if (granted) {
-            showToast('Notifications enabled! You\'ll be notified when events go live.', 'success');
+            showToast("Notifications enabled! You'll be notified when events go live.", 'success');
           }
         });
       }, 2000);
@@ -76,7 +72,6 @@ const AppRoutes: React.FC = () => {
   }, [isAuthenticated, hasPermission, requestPermission, showToast]);
 
   useEffect(() => {
-    // Check if user has a stored token on app load
     if (token && !isAuthenticated) {
       refreshUser();
     }
@@ -88,29 +83,52 @@ const AppRoutes: React.FC = () => {
 
   return (
     <div className="app">
-      {/* Render notification popups */}
       {notifications.map(notification => (
         <NotificationPopup
           key={notification.eventId}
           event={notification}
           onClose={() => dismissNotification(notification.eventId)}
           onViewEvent={(eventId) => {
-            // Navigate to map and open event modal
             navigate('/map');
-            // Trigger event selection via custom event
             globalThis.dispatchEvent(new CustomEvent('selectEvent', { detail: eventId }));
           }}
         />
       ))}
+
       <Routes>
         {/* Public routes */}
         <Route
           path="/login"
-          element={isAuthenticated ? <Navigate to="/map" replace /> : <Login onSwitchToRegister={handleSwitchToRegister} />}
+          element={
+            isAuthenticated
+              ? <Navigate to="/map" replace />
+              : <Login
+                onSwitchToRegister={handleSwitchToRegister}
+                onForgotPassword={handleForgotPassword}
+              />
+          }
         />
         <Route
           path="/register"
-          element={isAuthenticated ? <Navigate to="/map" replace /> : <Register onSwitchToLogin={handleSwitchToLogin} />}
+          element={
+            isAuthenticated
+              ? <Navigate to="/map" replace />
+              : <Register onSwitchToLogin={handleSwitchToLogin} />
+          }
+        />
+
+        {/* Password recovery — always public */}
+        <Route
+          path="/forgot-password"
+          element={
+            isAuthenticated
+              ? <Navigate to="/map" replace />
+              : <ForgotPassword onBackToLogin={handleSwitchToLogin} />
+          }
+        />
+        <Route
+          path="/reset-password"
+          element={<ResetPassword />}
         />
 
         {/* Protected routes */}
@@ -131,17 +149,9 @@ const AppRoutes: React.FC = () => {
           element={isAuthenticated ? <ModeratorPanel /> : <Navigate to="/login" replace />}
         />
 
-        {/* Default redirect */}
-        <Route
-          path="/"
-          element={<Navigate to={isAuthenticated ? "/map" : "/login"} replace />}
-        />
-
-        {/* Catch all, redirect to appropriate page */}
-        <Route
-          path="*"
-          element={<Navigate to={isAuthenticated ? "/map" : "/login"} replace />}
-        />
+        {/* Default + catch-all */}
+        <Route path="/" element={<Navigate to={isAuthenticated ? '/map' : '/login'} replace />} />
+        <Route path="*" element={<Navigate to={isAuthenticated ? '/map' : '/login'} replace />} />
       </Routes>
     </div>
   );

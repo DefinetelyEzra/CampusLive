@@ -8,23 +8,36 @@ datasource db {
 }
 
 model User {
-  id                     String             @id @default(cuid())
-  email                  String             @unique
-  username               String             @unique
+  id                     String               @id @default(cuid())
+  email                  String               @unique
+  username               String               @unique
   password               String
-  role                   UserRole           @default(STUDENT)
-  createdAt              DateTime           @default(now())
-  updatedAt              DateTime           @updatedAt
+  role                   UserRole             @default(STUDENT)
+  createdAt              DateTime             @default(now())
+  updatedAt              DateTime             @updatedAt
   participants           EventParticipant[]
-  moderatedEvents        Event[]            @relation("EventLiveModerator")
+  moderatedEvents        Event[]              @relation("EventLiveModerator")
   organizedEvents        Event[]
   media                  Media[]
-  moderatorTokensCreated ModeratorToken[]   @relation("ModeratorTokensCreated")
-  moderatorTokenUsed     ModeratorToken?    @relation("ModeratorTokenUsedBy")
+  moderatorTokensCreated ModeratorToken[]     @relation("ModeratorTokensCreated")
+  moderatorTokenUsed     ModeratorToken?      @relation("ModeratorTokenUsedBy")
   posts                  Post[]
   userRoles              UserAppRole[]
+  passwordResetTokens    PasswordResetToken[] // ← NEW
 
   @@map("users")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  token     String    @unique
+  userId    String
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("password_reset_tokens")
 }
 
 model Location {
@@ -71,12 +84,11 @@ model Event {
   maxAttendees   Int?
   totalAttendees Int         @default(0)
 
-  // Advanced options
   isPrivate      Boolean         @default(false)
   accessKey      String?
   isRecurring    Boolean         @default(false)
   recurrenceType RecurrenceType?
-  parentEventId  String? // For recurring events
+  parentEventId  String?
 
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt

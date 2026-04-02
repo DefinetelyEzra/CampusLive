@@ -7,9 +7,10 @@ import { useToast } from '../toastContext';
 
 interface LoginProps {
   onSwitchToRegister: () => void;
+  onForgotPassword: () => void;
 }
 
-const Login: React.FC<LoginProps> = ({ onSwitchToRegister }) => {
+const Login: React.FC<LoginProps> = ({ onSwitchToRegister, onForgotPassword }) => {
   const [credentials, setCredentials] = useState<LoginCredentials>({
     email: '',
     password: '',
@@ -98,6 +99,7 @@ const Login: React.FC<LoginProps> = ({ onSwitchToRegister }) => {
             handleSubmit={handleSubmit}
             setShowPassword={setShowPassword}
             onSwitchToRegister={onSwitchToRegister}
+            onForgotPassword={onForgotPassword}
           />
           <Footer isDarkMode={isDarkMode} />
         </div>
@@ -151,6 +153,7 @@ const MainCard = ({
   handleSubmit,
   setShowPassword,
   onSwitchToRegister,
+  onForgotPassword, // ← NEW
 }: {
   isDarkMode: boolean;
   credentials: LoginCredentials;
@@ -162,6 +165,7 @@ const MainCard = ({
   handleSubmit: (e: React.FormEvent) => void;
   setShowPassword: (value: boolean) => void;
   onSwitchToRegister: () => void;
+  onForgotPassword: () => void;
 }) => (
   <div className={`backdrop-blur-sm rounded-3xl shadow-2xl p-8 transition-all duration-300 border ${isDarkMode ? 'bg-slate-800/90 border-slate-700 shadow-blue-900/20' : 'bg-white/90 border-white/20 shadow-blue-200/30'}`}>
     <form onSubmit={handleSubmit} className="space-y-6">
@@ -176,19 +180,37 @@ const MainCard = ({
         isLoading={isLoading}
         handleChange={handleChange}
       />
-      <FormField
-        label="Password"
-        name="password"
-        type={showPassword ? 'text' : 'password'}
-        value={credentials.password}
-        placeholder="Enter your password"
-        icon={<Lock className="h-5 w-5 text-gray-400" />}
-        isDarkMode={isDarkMode}
-        isLoading={isLoading}
-        handleChange={handleChange}
-        showPassword={showPassword}
-        setShowPassword={setShowPassword}
-      />
+
+      {/* Password field + forgot password link */}
+      <div>
+        <FormField
+          label="Password"
+          name="password"
+          type={showPassword ? 'text' : 'password'}
+          value={credentials.password}
+          placeholder="Enter your password"
+          icon={<Lock className="h-5 w-5 text-gray-400" />}
+          isDarkMode={isDarkMode}
+          isLoading={isLoading}
+          handleChange={handleChange}
+          showPassword={showPassword}
+          setShowPassword={setShowPassword}
+        />
+        {/* Forgot password link */}
+        <div className="flex justify-end mt-2">
+          <button
+            type="button"
+            onClick={onForgotPassword}
+            className={`text-xs font-medium transition-colors duration-200 ${isDarkMode
+                ? 'text-blue-400 hover:text-blue-300'
+                : 'text-blue-600 hover:text-blue-800'
+              }`}
+          >
+            Forgot password?
+          </button>
+        </div>
+      </div>
+
       {error && (
         <div className={`p-4 rounded-xl border ${isDarkMode ? 'bg-red-900/50 border-red-800 text-red-300' : 'bg-red-50 border-red-200 text-red-700'}`}>
           <p className="text-sm">{error}</p>

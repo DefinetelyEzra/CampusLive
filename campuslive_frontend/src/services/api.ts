@@ -53,14 +53,12 @@ class ApiService {
             (response) => response,
             (error: AxiosError<{ error?: string }>) => {
                 const status = error.response?.status;
-                // Try to read the original request config safely
                 const reqConfig = (error.config ?? {}) as AxiosRequestConfig;
                 const reqHeaders = reqConfig.headers || {};
                 const hadAuthHeader = Boolean(reqHeaders.Authorization || reqHeaders.authorization);
                 const reqUrl: string = reqConfig.url || '';
                 const baseUrl: string = reqConfig.baseURL ?? '';
 
-                // normalize to a predictable path 
                 const normalizedPath = (() => {
                     try {
                         if (reqUrl.startsWith('http')) return new URL(reqUrl).pathname;
@@ -71,10 +69,11 @@ class ApiService {
                     }
                 })();
 
-                // Detect typical auth endpoints 
                 const isAuthEndpoint =
                     normalizedPath.includes('/auth/login') ||
                     normalizedPath.includes('/auth/register') ||
+                    normalizedPath.includes('/auth/forgot-password') ||
+                    normalizedPath.includes('/auth/reset-password') ||
                     normalizedPath === '/auth' ||
                     normalizedPath.startsWith('/auth/');
 
@@ -84,11 +83,8 @@ class ApiService {
                         hadAuthHeader || (!!storedToken && !isAuthEndpoint);
 
                     if (shouldTriggerUnauthorized) {
-                        // Clear local auth state 
                         this.removeAuthToken();
                         localStorage.removeItem('user');
-
-                        // Call the app-level handler 
                         try {
                             this.onUnauthorized?.();
                         } catch (e) {
@@ -109,7 +105,8 @@ class ApiService {
         );
     }
 
-    // Authentication endpoints
+    // ─── Authentication endpoints ─────────────────────────────────────────────
+
     async login(credentials: LoginCredentials): Promise<AuthResponse> {
         const response: AxiosResponse<{
             success?: boolean;
@@ -121,7 +118,6 @@ class ApiService {
 
         console.log('Raw login response:', response.data);
 
-        // Handle different response structures
         if (response.data.data) {
             return {
                 success: true,
@@ -159,7 +155,6 @@ class ApiService {
 
         console.log('Raw register response:', response.data);
 
-        // Handle different response structures  
         if (response.data.data) {
             return {
                 success: true,
@@ -206,25 +201,44 @@ class ApiService {
         return response.data.data;
     }
 
-    // Location endpoints
-    async getAllLocations(): Promise<Location[]> {
-        const response: AxiosResponse<{ success: boolean; message: string; data: Location[] }> = await this.api.get('/locations');
-        return response.data.data || [];
+    // Password recovery
+
+    /**
+     * Request a password-reset email.
+     * The server always responds with 200 regardless of whether the email exists.
+     */
+    async forgotPassword(email: string): Promise<void> {
+        await this.api.post('/auth/forgot-password', { email });
     }
 
-    async getLocationById(id: string): Promise<Location> {
-        const response: AxiosResponse<Location> = await this.api.get(`/locations/${id}`);
-        return response.data;
+    /**
+     * Submit the new password along with the raw token from the email link.
+     * Throws if the token is invalid, expired, or already used.
+     */
+    async resetPassword(token: string, password: string): Promise<void> {
+        await this.api.post('/auth/reset-password', { token, password });
+    }
+
+    // Location endpoints
+
+    async getAllLocations(): Promise<Location[]> {
+        const response: AxiosResponse<{ success: boolean; message: string; data: Location[] }> = await this.api.get('/locations');
+        return response.data.data;
+    }
+
+    async getLocation(id: string): Promise<Location> {
+        const response: AxiosResponse<{ success: boolean; data: Location }> = await this.api.get(`/locations/${id}`);
+        return response.data.data;
     }
 
     async createLocation(locationData: CreateLocationRequest): Promise<Location> {
         const response: AxiosResponse<{ success: boolean; data: Location }> = await this.api.post('/locations', locationData);
-        return response.data.data || response.data;
+        return response.data.data;
     }
 
     async updateLocation(id: string, locationData: Partial<CreateLocationRequest>): Promise<Location> {
         const response: AxiosResponse<{ success: boolean; data: Location }> = await this.api.put(`/locations/${id}`, locationData);
-        return response.data.data || response.data;
+        return response.data.data;
     }
 
     async deleteLocation(id: string): Promise<void> {
@@ -232,134 +246,34 @@ class ApiService {
     }
 
     // Event endpoints
-    async getAllEvents(isLive?: boolean): Promise<Event[]> {
-        const params = isLive === undefined ? {} : { isLive: isLive.toString() };
-        const response: AxiosResponse<{ success: boolean; message: string; data: Event[] }> = await this.api.get('/events', { params });
-        return response.data.data || [];
+
+    async getAllEvents(): Promise<Event[]> {
+        const response: AxiosResponse<{ success: boolean; data: Event[] }> = await this.api.get('/events');
+        return response.data.data;
     }
 
-    async getEventById(id: string): Promise<Event> {
-        const response: AxiosResponse<{ success: boolean; message: string; data: Event }> = await this.api.get(`/events/${id}`);
-
-        if (response.data && 'success' in response.data && response.data.data) {
-            return response.data.data;
-        }
-
-        throw new Error('Invalid response format from server');
+    async getEvent(id: string): Promise<Event> {
+        const response: AxiosResponse<{ success: boolean; data: Event }> = await this.api.get(`/events/${id}`);
+        return response.data.data;
     }
 
-    async createEvent(eventData: CreateEventRequest): Promise<Event | {
-        event: Event;
-        accessKey: string;
-        message: string
-    } | {
-        hasConflicts: true;
-        totalInstances: number;
-        conflictingInstances: Array<{
-            startTime: string;
-            endTime: string;
-            conflictsWith: string[];
-        }>;
-        eventData: CreateEventRequest;
-        locationName: string;
-    }> {
-        const response: AxiosResponse<{
-            success?: boolean;
-            message?: string;
-            data?: Event;
-            event?: Event;
-            accessKey?: string;
-            hasConflicts?: boolean;
-            totalInstances?: number;
-            conflictingInstances?: Array<{
-                startTime: string;
-                endTime: string;
-                conflictsWith: string[];
-            }>;
-            locationName?: string;
-        }> = await this.api.post('/events', eventData);
-
-        // Check for recurring conflicts
-        if (response.data.hasConflicts) {
-            return {
-                hasConflicts: true,
-                totalInstances: response.data.totalInstances!,
-                conflictingInstances: response.data.conflictingInstances!,
-                eventData,
-                locationName: response.data.locationName!
-            };
-        }
-
-        // Handle both direct event response and wrapped response with access key
-        if (response.data.accessKey) {
-            return {
-                event: response.data.event || response.data.data!,
-                accessKey: response.data.accessKey,
-                message: response.data.message || 'Event created successfully'
-            };
-        }
-
-        return response.data.data || response.data.event || response.data as Event;
+    async createEvent(eventData: CreateEventRequest): Promise<Event> {
+        const response: AxiosResponse<{ success: boolean; data: Event }> = await this.api.post('/events', eventData);
+        return response.data.data;
     }
 
-    async updateEvent(eventId: string, updateData: {
-        title?: string;
-        description?: string;
-        startTime?: string;
-        endTime?: string;
-    }): Promise<Event> {
-        const response: AxiosResponse<{ success: boolean; message: string; data: Event }> =
-            await this.api.patch(`/events/${eventId}`, updateData);
-        return response.data.data || response.data;
-    }
-
-    async toggleEventLive(id: string, isLive: boolean): Promise<Event> {
-        const response: AxiosResponse<{ success: boolean; data: Event }> = await this.api.patch(`/events/${id}/toggle-live`, { isLive });
-        return response.data.data || response.data;
-    }
-
-    async endEvent(id: string): Promise<Event> {
-        const response: AxiosResponse<{ success: boolean; data: Event }> = await this.api.patch(`/events/${id}/end`);
-        return response.data.data || response.data;
+    async updateEvent(id: string, eventData: Partial<CreateEventRequest>): Promise<Event> {
+        const response: AxiosResponse<{ success: boolean; data: Event }> = await this.api.put(`/events/${id}`, eventData);
+        return response.data.data;
     }
 
     async deleteEvent(id: string): Promise<void> {
         await this.api.delete(`/events/${id}`);
     }
 
-    // Event attendance endpoints
-    async joinEvent(
-        eventId: string,
-        role: string = 'WATCHER',
-        location?: { latitude: number; longitude: number },
-        accessKey?: string
-    ): Promise<EventAttendance> {
-        const requestBody: {
-            role: string;
-            latitude?: number;
-            longitude?: number;
-            accessKey?: string;
-        } = { role };
-
-        if (location) {
-            requestBody.latitude = location.latitude;
-            requestBody.longitude = location.longitude;
-        }
-
-        if (accessKey) {
-            requestBody.accessKey = accessKey;
-        }
-
-        const response: AxiosResponse<{ success: boolean; data: EventAttendance; message: string } | EventAttendance> =
-            await this.api.post(`/events/${eventId}/join`, requestBody);
-
-        if ('data' in response.data && response.data.data) {
-            return response.data.data;
-        } else if ('id' in response.data && 'eventId' in response.data && 'userId' in response.data && 'role' in response.data) {
-            return response.data;
-        }
-
-        throw new Error('Invalid response format from server');
+    async joinEvent(eventId: string, accessKey?: string): Promise<EventAttendance> {
+        const response: AxiosResponse<{ success: boolean; data: EventAttendance }> = await this.api.post(`/events/${eventId}/join`, { accessKey });
+        return response.data.data;
     }
 
     async updateUserLocation(eventId: string, latitude: number, longitude: number): Promise<{ distance: number; isWithinBounds: boolean }> {
@@ -388,13 +302,11 @@ class ApiService {
         return response.data;
     }
 
-    // Returns SINGLE active attendance (used for checking current attendance)
     async getMyAttendance(): Promise<{ success: boolean; data: EventAttendance | null }> {
         const response: AxiosResponse<{ success: boolean; data: EventAttendance | null }> = await this.api.get('/events/my/attendance');
         return response.data;
     }
 
-    // Returns ALL active attendances (used for Watchers with multiple events)
     async getMyAttendances(): Promise<{ success: boolean; data: EventAttendance[] }> {
         const response: AxiosResponse<{ success: boolean; data: EventAttendance[] }> =
             await this.api.get('/events/my/attendances');
@@ -402,6 +314,7 @@ class ApiService {
     }
 
     // Role management endpoints
+
     async generateModeratorTokens(count: number = 1): Promise<ModeratorToken[]> {
         const response: AxiosResponse<ModeratorToken[]> = await this.api.post('/roles/moderator-tokens', { count });
         return response.data;
@@ -437,6 +350,7 @@ class ApiService {
     }
 
     // Post endpoints
+
     async getPostsByLocation(locationId: string): Promise<Post[]> {
         const response: AxiosResponse<Post[]> = await this.api.get(`/posts/location/${locationId}`);
         return response.data;
@@ -449,25 +363,13 @@ class ApiService {
 
     async createPost(postData: CreatePostRequest): Promise<Post> {
         const formData = new FormData();
-
-        if (postData.content) {
-            formData.append('content', postData.content);
-        }
-
+        if (postData.content) formData.append('content', postData.content);
         formData.append('locationId', postData.locationId);
-
-        if (postData.eventId) {
-            formData.append('eventId', postData.eventId);
-        }
-
-        if (postData.media) {
-            formData.append('media', postData.media);
-        }
+        if (postData.eventId) formData.append('eventId', postData.eventId);
+        if (postData.media) formData.append('media', postData.media);
 
         const response: AxiosResponse<Post> = await this.api.post('/posts', formData, {
-            headers: {
-                'Content-Type': 'multipart/form-data',
-            },
+            headers: { 'Content-Type': 'multipart/form-data' },
         });
         return response.data;
     }
@@ -482,6 +384,7 @@ class ApiService {
     }
 
     // Admin endpoints
+
     async getAllUsers(): Promise<UserWithStats[]> {
         const response: AxiosResponse<{ success: boolean; data: UserWithStats[] }> = await this.api.get('/admin/users');
         return response.data.data;
@@ -525,6 +428,7 @@ class ApiService {
     }
 
     // Utility methods
+
     setAuthToken(token: string): void {
         localStorage.setItem('token', token);
         this.api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
@@ -539,29 +443,18 @@ class ApiService {
         this.onUnauthorized = fn;
     }
 
-    // File upload utility (for media posts)
     async uploadMedia(file: File, eventId?: string, locationId?: string): Promise<string> {
         const formData = new FormData();
         formData.append('media', file);
-
-        if (eventId) {
-            formData.append('eventId', eventId);
-        }
-
-        if (locationId) {
-            formData.append('locationId', locationId);
-        }
+        if (eventId) formData.append('eventId', eventId);
+        if (locationId) formData.append('locationId', locationId);
 
         const response: AxiosResponse<{ mediaUrl: string }> = await this.api.post('/upload', formData, {
-            headers: {
-                'Content-Type': 'multipart/form-data',
-            },
+            headers: { 'Content-Type': 'multipart/form-data' },
         });
-
         return response.data.mediaUrl;
     }
 
-    // Health check
     async healthCheck(): Promise<{ status: string; timestamp: string }> {
         const response: AxiosResponse<{ status: string; timestamp: string }> = await this.api.get('/health');
         return response.data;

@@ -1,8 +1,13 @@
 import { Router } from 'express';
 import { AuthController } from '../controllers/auth.controller.js';
 import { validateRequest } from '../middleware/validation.middleware.js';
-import { authenticateToken, requireRole, restrictAdminCreationForPublic } from '../middleware/auth.middleware.js';
+import {
+    authenticateToken,
+    requireRole,
+    restrictAdminCreationForPublic,
+} from '../middleware/auth.middleware.js';
 import { registerSchema, loginSchema } from '../utils/validation.js';
+import { authLimiter } from '../middleware/security.middleware.js';
 
 const router = Router();
 
@@ -10,5 +15,9 @@ router.post('/register', restrictAdminCreationForPublic, validateRequest(registe
 router.post('/login', validateRequest(loginSchema), AuthController.login);
 router.get('/profile', authenticateToken, AuthController.getProfile);
 router.delete('/delete/:id', authenticateToken, requireRole(['ADMIN']), AuthController.deleteUser);
+
+// Password Recovery
+router.post('/forgot-password', authLimiter, AuthController.forgotPassword);
+router.post('/reset-password', authLimiter, AuthController.resetPassword);
 
 export default router;
