@@ -247,8 +247,9 @@ class ApiService {
 
     // Event endpoints
 
-    async getAllEvents(): Promise<Event[]> {
-        const response: AxiosResponse<{ success: boolean; data: Event[] }> = await this.api.get('/events');
+    async getAllEvents(isLive?: boolean): Promise<Event[]> {
+        const params = isLive === undefined ? {} : { isLive };
+        const response: AxiosResponse<{ success: boolean; data: Event[] }> = await this.api.get('/events', { params });
         return response.data.data;
     }
 
@@ -257,7 +258,32 @@ class ApiService {
         return response.data.data;
     }
 
-    async createEvent(eventData: CreateEventRequest): Promise<Event> {
+    /** Alias for getEvent — used by CampusMap */
+    async getEventById(id: string): Promise<Event> {
+        return this.getEvent(id);
+    }
+
+    async toggleEventLive(eventId: string, isLive: boolean): Promise<Event> {
+        const response: AxiosResponse<{ success: boolean; data: Event }> = await this.api.patch(`/events/${eventId}/live`, { isLive });
+        return response.data.data;
+    }
+
+    async endEvent(eventId: string): Promise<Event> {
+        const response: AxiosResponse<{ success: boolean; data: Event }> = await this.api.patch(`/events/${eventId}/end`);
+        return response.data.data;
+    }
+
+    async createEvent(eventData: CreateEventRequest): Promise<
+        Event |
+        {
+            hasConflicts: true;
+            totalInstances: number;
+            conflictingInstances: Array<{ startTime: string; endTime: string; conflictsWith: string[] }>;
+            eventData: CreateEventRequest;
+            locationName: string;
+        } |
+        { event: Event; accessKey: string; message: string }
+    > {
         const response: AxiosResponse<{ success: boolean; data: Event }> = await this.api.post('/events', eventData);
         return response.data.data;
     }
@@ -271,8 +297,17 @@ class ApiService {
         await this.api.delete(`/events/${id}`);
     }
 
-    async joinEvent(eventId: string, accessKey?: string): Promise<EventAttendance> {
-        const response: AxiosResponse<{ success: boolean; data: EventAttendance }> = await this.api.post(`/events/${eventId}/join`, { accessKey });
+    async joinEvent(
+        eventId: string,
+        roleType?: string,
+        userLocation?: [number, number] | null,
+        accessKey?: string
+    ): Promise<EventAttendance> {
+        const body: Record<string, unknown> = {};
+        if (accessKey) body.accessKey = accessKey;
+        if (roleType) body.roleType = roleType;
+        if (userLocation) body.userLocation = { latitude: userLocation[0], longitude: userLocation[1] };
+        const response: AxiosResponse<{ success: boolean; data: EventAttendance }> = await this.api.post(`/events/${eventId}/join`, body);
         return response.data.data;
     }
 

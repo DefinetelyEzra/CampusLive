@@ -290,7 +290,7 @@ const EventManagement: React.FC<EventManagementProps> = ({ onEventCreated, isMod
         const response = await apiService.createEvent(eventData);
 
         // Check if response indicates conflicts
-        const hasConflicts = (resp: typeof response): resp is {
+        const hasConflicts = (resp: unknown): resp is {
             hasConflicts: true;
             totalInstances: number;
             conflictingInstances: Array<{
@@ -301,7 +301,7 @@ const EventManagement: React.FC<EventManagementProps> = ({ onEventCreated, isMod
             eventData: CreateEventRequest;
             locationName: string;
         } => {
-            return 'hasConflicts' in resp && resp.hasConflicts === true;
+            return typeof resp === 'object' && resp !== null && 'hasConflicts' in resp && (resp as { hasConflicts: unknown }).hasConflicts === true;
         };
 
         if (hasConflicts(response)) {
@@ -326,12 +326,12 @@ const EventManagement: React.FC<EventManagementProps> = ({ onEventCreated, isMod
             return;
         }
 
-        const isPrivateEventResponse = (resp: typeof response): resp is {
+        const isPrivateEventResponse = (resp: unknown): resp is {
             event: Event;
             accessKey: string;
             message: string
         } => {
-            return 'accessKey' in resp && typeof resp.accessKey === 'string';
+            return typeof resp === 'object' && resp !== null && 'accessKey' in resp && typeof (resp as { accessKey: unknown }).accessKey === 'string';
         };
 
         if (isPrivateEventResponse(response)) {
@@ -722,7 +722,7 @@ const EventManagement: React.FC<EventManagementProps> = ({ onEventCreated, isMod
 
                             const response = await apiService.createEvent(updatedEventData);
 
-                            const hasConflicts = (resp: typeof response): resp is {
+                            const hasConflicts = (resp: unknown): resp is {
                                 hasConflicts: true;
                                 totalInstances: number;
                                 conflictingInstances: Array<{
@@ -733,7 +733,7 @@ const EventManagement: React.FC<EventManagementProps> = ({ onEventCreated, isMod
                                 eventData: CreateEventRequest;
                                 locationName: string;
                             } => {
-                                return 'hasConflicts' in resp && resp.hasConflicts === true;
+                                return typeof resp === 'object' && resp !== null && 'hasConflicts' in resp && (resp as { hasConflicts: unknown }).hasConflicts === true;
                             };
 
                             if (hasConflicts(response)) {
@@ -751,12 +751,12 @@ const EventManagement: React.FC<EventManagementProps> = ({ onEventCreated, isMod
                                 setShowConflictModal(true);
                                 showToast('Conflicts still exist. Please try a different time.');
                             } else {
-                                const isPrivateEventResponse = (resp: typeof response): resp is {
+                                const isPrivateEventResponse = (resp: unknown): resp is {
                                     event: Event;
                                     accessKey: string;
                                     message: string
                                 } => {
-                                    return 'accessKey' in resp && typeof resp.accessKey === 'string';
+                                    return typeof resp === 'object' && resp !== null && 'accessKey' in resp && typeof (resp as { accessKey: unknown }).accessKey === 'string';
                                 };
 
                                 setShowCreateForm(false);

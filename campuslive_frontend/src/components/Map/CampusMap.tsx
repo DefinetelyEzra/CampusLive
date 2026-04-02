@@ -1,10 +1,10 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
-import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import { useAuthStore } from '../../stores/authStore';
 import { useSocketStore } from '../../stores/socketStore';
 import { useRoleStore } from '../../stores/roleStore';
 import { useToast } from '../toastContext';
-import { LogOut, Users, Camera, Eye, Search, Shield } from 'lucide-react';
+import { LogOut, Users, Camera, Eye, Search, Shield, Navigation } from 'lucide-react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import RoleStatusIndicator from '../User/RoleStatusIndicator';
@@ -14,22 +14,20 @@ import apiService from '../../services/api';
 import { LocationService } from '../../services/locationService';
 
 // Constants
+
 const PAU_CENTER: [number, number] = [6.4865, 3.856059];
+
 const MAP_CONFIG = {
     INITIAL_ZOOM: 17,
     MIN_ZOOM: 15,
     MAX_ZOOM: 19,
-    REFRESH_INTERVAL: 30000, // 30 seconds
-    GEOLOCATION_OPTIONS: {
-        enableHighAccuracy: true,
-        timeout: 10000,
-        maximumAge: 0 // Changed from 5000
-    }
+    REFRESH_INTERVAL: 30_000, // ms
 } as const;
 
+/** SW and NE corners of PAU campus */
 const CAMPUS_BOUNDS: [[number, number], [number, number]] = [
     [6.48, 3.85],
-    [6.493, 3.862]
+    [6.493, 3.862],
 ];
 
 const ROLE_COLORS = {
@@ -37,20 +35,25 @@ const ROLE_COLORS = {
     POSTER: '#ea580c',
     WATCHER: '#2563eb',
     DEFAULT_LIVE: '#10b981',
-    DEFAULT_ENDED: '#6b7280'
+    DEFAULT_ENDED: '#6b7280',
 } as const;
 
 // Types
-interface EventActionData { eventId: string; }
-interface LocationWarning { message: string; maxDistance?: number; distance?: number; }
-interface UserAttendance { eventId: string; role: string; }
 
-// Utility functions
-const createEventIcon = (status: 'live' | 'ended', hasMedia: boolean, userRole?: string): L.DivIcon => {
-    let color: '#10b981' | '#6b7280' = status === 'live' ? ROLE_COLORS.DEFAULT_LIVE : ROLE_COLORS.DEFAULT_ENDED;
+interface EventActionData { eventId: string }
+interface LocationWarning { message: string; maxDistance?: number; distance?: number }
+interface UserAttendance { eventId: string; role: string }
 
+// Icon factories
+
+const createEventIcon = (
+    status: 'live' | 'ended',
+    hasMedia: boolean,
+    userRole?: string,
+): L.DivIcon => {
+    let color: string = status === 'live' ? ROLE_COLORS.DEFAULT_LIVE : ROLE_COLORS.DEFAULT_ENDED;
     if (userRole && userRole in ROLE_COLORS) {
-        color = ROLE_COLORS[userRole as keyof typeof ROLE_COLORS] as '#10b981' | '#6b7280';
+        color = ROLE_COLORS[userRole as keyof typeof ROLE_COLORS];
     }
 
     const pulseClass = status === 'live' ? 'animate-pulse' : '';
@@ -61,245 +64,236 @@ const createEventIcon = (status: 'live' | 'ended', hasMedia: boolean, userRole?:
     return L.divIcon({
         html: `
       <div class="relative">
-        <div class="w-6 h-6 ${pulseClass} bg-white rounded-full shadow-lg flex items-center justify-center" style="border:2px solid ${color}">
+        <div class="w-6 h-6 ${pulseClass} bg-white rounded-full shadow-lg flex items-center justify-center"
+             style="border:2px solid ${color}">
           <div class="w-3 h-3 rounded-full" style="background:${color}"></div>
         </div>
         ${mediaIndicator}
-      </div>
-    `,
+      </div>`,
         className: 'custom-event-marker',
         iconSize: [24, 24],
-        iconAnchor: [12, 12]
+        iconAnchor: [12, 12],
     });
 };
 
-const createUserLocationIcon = (): L.DivIcon => L.divIcon({
-    html: '<div class="w-4 h-4 bg-blue-600 border-2 border-white rounded-full shadow-lg"></div>',
-    className: 'user-location-marker',
-    iconSize: [16, 16],
-    iconAnchor: [8, 8]
-});
+const createUserLocationIcon = (accuracy?: number): L.DivIcon => {
+    // Outer ring scales with accuracy (capped so it doesn't fill the screen)
+    const ringSize = accuracy ? Math.min(Math.max(accuracy / 2, 16), 60) : 16;
+    return L.divIcon({
+        html: `
+      <div class="relative flex items-center justify-center"
+           style="width:${ringSize}px;height:${ringSize}px;">
+        <div class="absolute inset-0 rounded-full bg-blue-400 opacity-20"></div>
+        <div class="w-4 h-4 bg-blue-600 border-2 border-white rounded-full shadow-lg z-10"></div>
+      </div>`,
+        className: 'user-location-marker',
+        iconSize: [ringSize, ringSize],
+        iconAnchor: [ringSize / 2, ringSize / 2],
+    });
+};
+
+// Sub-component: re-centre map when user location changes
+
+interface RecenterProps { position: [number, number] | null; triggered: boolean }
+const RecenterMap: React.FC<RecenterProps> = ({ position, triggered }) => {
+    const map = useMap();
+    useEffect(() => {
+        if (position && triggered) {
+            map.setView(position, map.getZoom(), { animate: true });
+        }
+    }, [map, position, triggered]);
+    return null;
+};
+
+// Main component
 
 const CampusMap: React.FC = () => {
-    // Store hooks
     const { user, logout } = useAuthStore();
     const { socket, connectSocket } = useSocketStore();
     const { currentRole } = useRoleStore();
     const { showToast } = useToast();
 
-    // State
     const [events, setEvents] = useState<Event[]>([]);
     const [selectedEvent, setSelectedEvent] = useState<Event | null>(null);
-    const [showEventModal, setShowEventModal] = useState<boolean>(false);
+    const [showEventModal, setShowEventModal] = useState(false);
     const [userLocation, setUserLocation] = useState<[number, number] | null>(null);
-    const [mobileMenuOpen, setMobileMenuOpen] = useState<boolean>(false);
-    const [searchQuery, setSearchQuery] = useState<string>('');
+    const [userAccuracy, setUserAccuracy] = useState<number | undefined>(undefined);
+    const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+    const [searchQuery, setSearchQuery] = useState('');
     const [userAttendances, setUserAttendances] = useState<UserAttendance[]>([]);
-    const [isWithinCampus, setIsWithinCampus] = useState<boolean>(true);
-    const [boundsMessage, setBoundsMessage] = useState<string>('');
+    const [isWithinCampus, setIsWithinCampus] = useState(true);
+    const [boundsMessage, setBoundsMessage] = useState('');
+    const [recenterMap, setRecenterMap] = useState(false);
 
-    // Refs for cleanup and preventing infinite loops
     const locationWatchIdRef = useRef<number | undefined>(undefined);
-    const refreshIntervalRef = useRef<NodeJS.Timeout | undefined>(undefined);
+    const refreshIntervalRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
+    // Track previous isWithinCampus to fire toasts only on transitions
+    const prevWithinCampusRef = useRef<boolean>(true);
 
-    // Memoized values
     const isAdmin = useMemo(() => user?.role === 'ADMIN', [user?.role]);
 
-    const filteredEvents = useMemo(() =>
-        events.filter(event =>
-            event.title?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-            event.location?.name?.toLowerCase().includes(searchQuery.toLowerCase())
+    const filteredEvents = useMemo(
+        () => events.filter(evt =>
+            evt.title?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+            evt.location?.name?.toLowerCase().includes(searchQuery.toLowerCase()),
         ),
-        [events, searchQuery]
+        [events, searchQuery],
     );
 
-    // Data loading functions
+    // data loaders
+
     const loadEvents = useCallback(async () => {
         try {
             const allEvents = await apiService.getAllEvents();
-            const liveEvents = allEvents.filter(event => event.isLive);
-            setEvents(liveEvents);
-            console.log(`Loaded ${liveEvents.length} live events at ${new Date().toLocaleTimeString()}`);
-        } catch (error) {
-            console.error('Failed to load events:', error);
+            setEvents(allEvents.filter(e => e.isLive));
+        } catch (err) {
+            console.error('Failed to load events:', err);
         }
     }, []);
 
     const loadUserAttendance = useCallback(async () => {
         try {
-            const response = await apiService.getMyAttendances();
-            if (response?.success && response.data) {
-                setUserAttendances(
-                    response.data.map((attendance) => ({
-                        eventId: attendance.eventId,
-                        role: attendance.role
-                    }))
-                );
+            const res = await apiService.getMyAttendances();
+            if (res?.success && res.data) {
+                setUserAttendances(res.data.map(a => ({ eventId: a.eventId, role: a.role })));
             } else {
                 setUserAttendances([]);
             }
-        } catch (error) {
-            console.error('Failed to load user attendances:', error);
+        } catch {
             setUserAttendances([]);
         }
     }, []);
 
-    // Geolocation handlers
+    // geolocation
+
     const handlePositionUpdate = useCallback((position: GeolocationPosition) => {
-        const location: [number, number] = [
-            position.coords.latitude,
-            position.coords.longitude
-        ];
-        console.log(`Position update - Lat: ${location[0].toFixed(6)}, Lng: ${location[1].toFixed(6)}, Accuracy: ${position.coords.accuracy.toFixed(2)}m`);
+        const lat = position.coords.latitude;
+        const lng = position.coords.longitude;
+        const acc = position.coords.accuracy;
 
-        // Check if within campus bounds
-        const [minLat, minLng] = CAMPUS_BOUNDS[0];
-        const [maxLat, maxLng] = CAMPUS_BOUNDS[1];
+        console.debug(`[CampusMap] Position — lat:${lat.toFixed(6)} lng:${lng.toFixed(6)} acc:${acc?.toFixed(0)}m`);
 
-        const withinBounds =
-            location[0] >= minLat &&
-            location[0] <= maxLat &&
-            location[1] >= minLng &&
-            location[1] <= maxLng;
+        const [[minLat, minLng], [maxLat, maxLng]] = CAMPUS_BOUNDS;
+        const within = lat >= minLat && lat <= maxLat && lng >= minLng && lng <= maxLng;
 
-        setIsWithinCampus(withinBounds);
-
-        if (withinBounds) {
-            if (!isWithinCampus && boundsMessage) {
-                showToast('Welcome back to campus!', 'success');
-            }
-            setBoundsMessage('');
-            setUserLocation(location);
-        } else {
-            setBoundsMessage('You are outside Pan-Atlantic University campus bounds');
-            if (isWithinCampus) {
-                showToast('You are outside campus bounds');
-            }
-            setUserLocation(null);
+        // Only show toasts on state transitions, not on every tick
+        if (within && !prevWithinCampusRef.current) {
+            showToast('Welcome back to campus!', 'success');
+        } else if (!within && prevWithinCampusRef.current) {
+            showToast('You are outside campus bounds', 'error');
         }
+        prevWithinCampusRef.current = within;
 
-        // Send location updates to backend if user is in an event and not a watcher
-        if (socket && withinBounds && currentRole?.roleType !== 'WATCHER' && userAttendances.length > 0) {
+        setIsWithinCampus(within);
+        setBoundsMessage(within ? '' : 'You are outside Pan-Atlantic University campus bounds');
+
+        setUserLocation(within ? [lat, lng] : null);
+        setUserAccuracy(within ? acc : undefined);
+
+        // Forward location to the backend for active, non-watcher attendances
+        if (socket && within && currentRole?.roleType !== 'WATCHER' && userAttendances.length > 0) {
             for (const attendance of userAttendances) {
                 socket.emit('update-location', {
                     eventId: attendance.eventId,
-                    latitude: position.coords.latitude,
-                    longitude: position.coords.longitude
-                }, (response: { success?: boolean; skipped?: boolean; reason?: string; message?: string }) => {
-                    if (response?.skipped) {
-                        console.log(`Location update skipped: ${response.reason}`);
+                    latitude: lat,
+                    longitude: lng,
+                }, (res: { success?: boolean; skipped?: boolean; reason?: string }) => {
+                    if (res?.skipped) {
+                        console.debug(`[CampusMap] Location update skipped: ${res.reason}`);
                     }
                 });
             }
         }
-    }, [socket, currentRole, userAttendances, showToast, isWithinCampus, boundsMessage]);
+    }, [socket, currentRole, userAttendances, showToast]);
 
     const handlePositionError = useCallback((error: GeolocationPositionError) => {
-        const errorMessages: { [key in typeof error.code]: string } = {
-            [error.PERMISSION_DENIED]: 'Geolocation permission denied by user',
-            [error.POSITION_UNAVAILABLE]: 'Location information unavailable',
-            [error.TIMEOUT]: 'Location request timed out'
+        const messages: Record<number, string> = {
+            [GeolocationPositionError.PERMISSION_DENIED]: 'Location permission denied',
+            [GeolocationPositionError.POSITION_UNAVAILABLE]: 'Location unavailable',
+            [GeolocationPositionError.TIMEOUT]: 'Location request timed out',
         };
-        const message = errorMessages[error.code] || 'Unknown geolocation error';
-        console.log(message);
-        showToast(message, 'error');
+        const msg = messages[error.code] ?? 'Unknown location error';
+        console.warn('[CampusMap] Geolocation error:', msg);
+        showToast(msg, 'error');
     }, [showToast]);
 
-    // Location tracking
-const startLocationTracking = useCallback(() => {
-    if (!navigator.geolocation || locationWatchIdRef.current !== undefined) {
-        return;
-    }
+    const startLocationTracking = useCallback(() => {
+        if (!navigator.geolocation || locationWatchIdRef.current !== undefined) return;
 
-    const watchPosition = () => {
-        const watchId = LocationService.watchPosition(
-            handlePositionUpdate,
-            handlePositionError
-        );
-        locationWatchIdRef.current = watchId;
-    };
-
-    if ('permissions' in navigator) {
-        navigator.permissions.query({ name: 'geolocation' }).then((result) => {
-            if (result.state !== 'denied') {
-                watchPosition();
-            }
-        }).catch(() => watchPosition());
-    } else {
-        watchPosition();
-    }
-}, [handlePositionUpdate, handlePositionError]);
-
-const stopLocationTracking = useCallback(() => {
-    if (locationWatchIdRef.current !== undefined) {
-        LocationService.clearWatch(locationWatchIdRef.current);
-        locationWatchIdRef.current = undefined;
-    }
-}, []);
-
-    // Socket event handlers
-    const handleEventUpdate = useCallback((update: EventStatusUpdate) => {
-        setEvents(prev => {
-            const updatedEvents = prev.map(evt =>
-                evt.id === update.eventId
-                    ? {
-                        ...evt,
-                        isLive: update.isLive,
-                        status: update.status || (update.isLive ? 'LIVE' : 'ENDED')
-                    }
-                    : evt
+        const start = () => {
+            locationWatchIdRef.current = LocationService.watchPosition(
+                handlePositionUpdate,
+                handlePositionError,
             );
-            return updatedEvents.filter(evt => evt.isLive);
-        });
+            console.debug('[CampusMap] Location tracking started, watchId:', locationWatchIdRef.current);
+        };
 
-        // Delayed refresh for consistency
+        if ('permissions' in navigator) {
+            navigator.permissions
+                .query({ name: 'geolocation' })
+                .then(result => { if (result.state !== 'denied') start(); })
+                .catch(() => start());
+        } else {
+            start();
+        }
+    }, [handlePositionUpdate, handlePositionError]);
+
+    const stopLocationTracking = useCallback(() => {
+        if (locationWatchIdRef.current !== undefined) {
+            LocationService.clearWatch(locationWatchIdRef.current);
+            locationWatchIdRef.current = undefined;
+            console.debug('[CampusMap] Location tracking stopped');
+        }
+    }, []);
+
+    // socket handlers
+
+    const handleEventUpdate = useCallback((update: EventStatusUpdate) => {
+        setEvents(prev =>
+            prev
+                .map(evt =>
+                    evt.id === update.eventId
+                        ? { ...evt, isLive: update.isLive, status: update.status ?? (update.isLive ? 'LIVE' : 'ENDED') }
+                        : evt,
+                )
+                .filter(evt => evt.isLive),
+        );
         setTimeout(loadEvents, 1000);
     }, [loadEvents]);
 
-    const handleEventEnded = useCallback((data: EventActionData) => {
-        setEvents(prev => prev.filter(evt => evt.id !== data.eventId));
-    }, []);
+    const handleEventEnded = useCallback((d: EventActionData) => setEvents(p => p.filter(e => e.id !== d.eventId)), []);
+    const handleEventDeleted = useCallback((d: EventActionData) => setEvents(p => p.filter(e => e.id !== d.eventId)), []);
 
-    const handleEventDeleted = useCallback((data: EventActionData) => {
-        setEvents(prev => prev.filter(evt => evt.id !== data.eventId));
-    }, []);
-
-    const handleLocationWarning = useCallback((warning: LocationWarning) => {
-        showToast(`Location Warning: ${warning.message}`, 'error');
+    const handleLocationWarning = useCallback((w: LocationWarning) => {
+        showToast(`Location Warning: ${w.message}`, 'error');
     }, [showToast]);
 
-    const handleRemovedFromEvent = useCallback((data: { reason?: string }) => {
-        showToast(`You were removed from the event: ${data.reason ?? 'No reason provided'}`, 'error');
+    const handleRemovedFromEvent = useCallback((d: { reason?: string }) => {
+        showToast(`Removed from event: ${d.reason ?? 'no reason provided'}`, 'error');
     }, [showToast]);
 
-    const handleUserJoinedEvent = useCallback((data: { userId: string; eventId: string; role: string }) => {
-        if (data.userId === user?.id) {
-            setUserAttendances(prev => {
-                // Check if already attending
-                if (prev.some(a => a.eventId === data.eventId)) {
-                    return prev;
-                }
-                return [...prev, { eventId: data.eventId, role: data.role }];
-            });
-            loadEvents();
-        }
+    const handleUserJoinedEvent = useCallback((d: { userId: string; eventId: string; role: string }) => {
+        if (d.userId !== user?.id) return;
+        setUserAttendances(prev =>
+            prev.some(a => a.eventId === d.eventId) ? prev : [...prev, { eventId: d.eventId, role: d.role }],
+        );
+        loadEvents();
     }, [user?.id, loadEvents]);
 
-    const handleUserLeftEvent = useCallback((data: { userId: string; eventId: string }) => {
-        if (data.userId === user?.id) {
-            setUserAttendances(prev => prev.filter(a => a.eventId !== data.eventId));
-            loadEvents();
-        }
+    const handleUserLeftEvent = useCallback((d: { userId: string; eventId: string }) => {
+        if (d.userId !== user?.id) return;
+        setUserAttendances(prev => prev.filter(a => a.eventId !== d.eventId));
+        loadEvents();
     }, [user?.id, loadEvents]);
 
-    // Event handlers
+    // event marker click
+
     const handleEventMarkerClick = useCallback(async (eventId: string) => {
         try {
             const event = await apiService.getEventById(eventId);
             setSelectedEvent(event);
             setShowEventModal(true);
-        } catch (error) {
-            console.error('Failed to load event details:', error);
+        } catch {
             showToast('Failed to load event details', 'error');
         }
     }, [showToast]);
@@ -309,151 +303,112 @@ const stopLocationTracking = useCallback(() => {
         loadUserAttendance();
     }, [loadEvents, loadUserAttendance]);
 
-    // Effects
+    // effects
+    
+    // Initial data load
     useEffect(() => {
         loadUserAttendance();
     }, [loadUserAttendance]);
 
-    // Initialize socket and load data
+    // Socket init + initial event load
     useEffect(() => {
-        if (!socket) {
-            connectSocket();
-        }
+        if (!socket) connectSocket();
         loadEvents();
     }, [socket, connectSocket, loadEvents]);
 
-    // Handle event selection from notifications
+    // Notification → open event modal
     useEffect(() => {
-        const handleSelectEvent = async (e: globalThis.Event) => {
-            // Type guard to ensure it's a CustomEvent with string detail
-            if (!(e instanceof CustomEvent) || typeof e.detail !== 'string') {
-                console.warn('Received invalid selectEvent:', e);
-                return;
-            }
-
-            const eventId = e.detail;
+        const handler = async (e: globalThis.Event) => {
+            if (!(e instanceof CustomEvent) || typeof e.detail !== 'string') return;
             try {
-                const event = await apiService.getEventById(eventId);
+                const event = await apiService.getEventById(e.detail);
                 setSelectedEvent(event);
                 setShowEventModal(true);
-            } catch (error) {
-                console.error('Failed to load event:', error);
+            } catch {
                 showToast('Failed to load event details', 'error');
             }
         };
-
-        globalThis.addEventListener('selectEvent', handleSelectEvent);
-
-        return () => {
-            globalThis.removeEventListener('selectEvent', handleSelectEvent);
-        };
+        globalThis.addEventListener('selectEvent', handler);
+        return () => globalThis.removeEventListener('selectEvent', handler);
     }, [showToast]);
 
-    // Periodic refresh
     useEffect(() => {
-        const refreshEvents = () => {
-            console.log('Auto-refreshing events...');
+        refreshIntervalRef.current = setInterval(() => {
+            console.debug('[CampusMap] Auto-refreshing events…');
             handleRefreshEvents();
-        };
-
-        refreshIntervalRef.current = globalThis.setInterval(refreshEvents, MAP_CONFIG.REFRESH_INTERVAL);
-
-        // cleanup 
-        if (refreshIntervalRef.current !== undefined) {
-            globalThis.clearInterval(refreshIntervalRef.current);
-            refreshIntervalRef.current = undefined;
-        }
+        }, MAP_CONFIG.REFRESH_INTERVAL);
 
         return () => {
-            if (refreshIntervalRef.current) {
+            if (refreshIntervalRef.current !== undefined) {
                 clearInterval(refreshIntervalRef.current);
+                refreshIntervalRef.current = undefined;
             }
         };
     }, [handleRefreshEvents]);
 
-    // Location tracking based on role
     useEffect(() => {
-        if (currentRole && currentRole.roleType !== 'WATCHER') {
-            startLocationTracking();
-        } else {
-            stopLocationTracking();
-        }
-
+        startLocationTracking();
         return stopLocationTracking;
-    }, [currentRole, startLocationTracking, stopLocationTracking]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []); // start once on mount, stop on unmount
 
     // Socket event listeners
     useEffect(() => {
         if (!socket) return;
 
-        const socketEvents = {
-            'eventStatusUpdate': handleEventUpdate,
-            'eventEnded': handleEventEnded,
-            'eventDeleted': handleEventDeleted,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const handlers: Record<string, (...args: any[]) => void> = {
+            eventStatusUpdate: handleEventUpdate,
+            eventEnded: handleEventEnded,
+            eventDeleted: handleEventDeleted,
             'location-warning': handleLocationWarning,
             'removed-from-event': handleRemovedFromEvent,
             'user-joined-event': handleUserJoinedEvent,
-            'user-left-event': handleUserLeftEvent
+            'user-left-event': handleUserLeftEvent,
         };
 
-        // Register listeners
-        for (const [event, handler] of Object.entries(socketEvents)) {
-            socket.on(event, handler);
-        }
-
-        // Cleanup listeners
-        return () => {
-            for (const [event, handler] of Object.entries(socketEvents)) {
-                socket.off(event, handler);
-            }
-        };
+        for (const [ev, fn] of Object.entries(handlers)) socket.on(ev, fn);
+        return () => { for (const [ev, fn] of Object.entries(handlers)) socket.off(ev, fn); };
     }, [socket, handleEventUpdate, handleEventEnded, handleEventDeleted,
         handleLocationWarning, handleRemovedFromEvent, handleUserJoinedEvent, handleUserLeftEvent]);
 
-    // Custom event listener for refresh
+    // Custom refresh event listener
     useEffect(() => {
         globalThis.addEventListener('refreshEvents', handleRefreshEvents);
         return () => globalThis.removeEventListener('refreshEvents', handleRefreshEvents);
     }, [handleRefreshEvents]);
 
     // Cleanup on unmount
-    useEffect(() => {
-        return () => {
-            stopLocationTracking();
-            if (refreshIntervalRef.current) {
-                clearInterval(refreshIntervalRef.current);
-            }
-        };
+    useEffect(() => () => {
+        stopLocationTracking();
+        if (refreshIntervalRef.current) clearInterval(refreshIntervalRef.current);
     }, [stopLocationTracking]);
 
-    // Render helpers
-    const renderEventMarkers = () => (
+    // render helpers
+
+    const renderEventMarkers = () =>
         filteredEvents.map(evt => {
             const { latitude: lat, longitude: lng } = evt.location;
-
             if (Number.isNaN(lat) || Number.isNaN(lng)) {
-                console.warn(`Invalid coordinates for event ${evt.title}: lat=${lat}, lng=${lng}`);
+                console.warn(`[CampusMap] Invalid coords for event "${evt.title}": lat=${lat} lng=${lng}`);
                 return null;
             }
-
             const hasMedia = (evt.posts?.length ?? 0) > 0;
             const attendance = userAttendances.find(a => a.eventId === evt.id);
-            const userRole = attendance?.role;
 
             return (
                 <Marker
                     key={evt.id}
                     position={[lat, lng]}
-                    icon={createEventIcon(evt.isLive ? 'live' : 'ended', hasMedia, userRole)}
+                    icon={createEventIcon(evt.isLive ? 'live' : 'ended', hasMedia, attendance?.role)}
                     eventHandlers={{ click: () => void handleEventMarkerClick(evt.id) }}
                 >
                     <Popup>
-                        <div className="text-center">
-                            <h3 className="font-bold">{evt.title}</h3>
-                            <p className="text-sm text-gray-600">{evt.location?.name}</p>
+                        <div className="text-center min-w-[160px]">
+                            <h3 className="font-bold text-sm">{evt.title}</h3>
+                            <p className="text-xs text-gray-600">{evt.location?.name}</p>
                             <div className="flex items-center justify-center mt-2 space-x-2">
-                                <span className={`px-2 py-1 rounded-full text-xs ${evt.isLive ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'
-                                    }`}>
+                                <span className={`px-2 py-1 rounded-full text-xs ${evt.isLive ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}`}>
                                     {evt.isLive ? 'LIVE' : 'ENDED'}
                                 </span>
                                 <span className="text-xs text-gray-500">
@@ -464,24 +419,33 @@ const stopLocationTracking = useCallback(() => {
                     </Popup>
                 </Marker>
             );
-        })
-    );
+        });
 
     const renderUserLocationMarker = () => {
         if (!userLocation || !isWithinCampus) return null;
-
         return (
-            <Marker position={userLocation} icon={createUserLocationIcon()}>
+            <Marker
+                position={userLocation}
+                icon={createUserLocationIcon(userAccuracy)}
+                zIndexOffset={1000}
+            >
                 <Popup>
                     <div className="text-center">
                         <p className="font-medium">Your Location</p>
                         <p className="text-xs text-gray-600">{user?.username}</p>
-                        <p className="text-xs text-green-600 mt-1">✓ Within campus bounds</p>
+                        {userAccuracy && (
+                            <p className="text-xs text-gray-400 mt-1">
+                                ±{Math.round(userAccuracy)} m accuracy
+                            </p>
+                        )}
+                        <p className="text-xs text-green-600 mt-1">✓ Within campus</p>
                     </div>
                 </Popup>
             </Marker>
         );
     };
+
+    // JSX 
 
     return (
         <div className="min-h-screen bg-gray-50">
@@ -501,12 +465,12 @@ const stopLocationTracking = useCallback(() => {
                         {/* Search */}
                         <div className={`hidden md:flex md:items-center ${isAdmin ? 'md:w-1/4' : 'md:w-1/3'}`}>
                             <div className="w-full relative">
-                                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-gray-500" />
+                                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-500" />
                                 <input
                                     value={searchQuery}
                                     onChange={e => setSearchQuery(e.target.value)}
                                     placeholder="Search events or locations..."
-                                    className={`pl-10 pr-4 py-2 w-full rounded-xl bg-gray-100 text-gray-800 placeholder-gray-500 border border-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 ${isAdmin ? 'text-sm' : 'text-base'}`}
+                                    className={`pl-10 pr-4 py-2 w-full rounded-xl bg-gray-100 text-gray-800 placeholder-gray-500 border border-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500 ${isAdmin ? 'text-sm' : 'text-base'}`}
                                 />
                             </div>
                         </div>
@@ -514,41 +478,31 @@ const stopLocationTracking = useCallback(() => {
                         {/* Controls */}
                         <div className="flex items-center space-x-3">
                             <div className="hidden md:flex items-center space-x-3">
-                                {/* Only show role indicator if NOT a moderator */}
                                 {currentRole?.roleType !== 'MODERATOR' && <RoleStatusIndicator />}
 
                                 {isAdmin && (
-                                    <button
-                                        onClick={() => (globalThis.location.href = '/admin')}
-                                        className="flex items-center space-x-2 px-3 py-2 text-sm font-medium rounded-2xl bg-blue-100 hover:bg-blue-200 text-blue-700 transition"
-                                    >
-                                        <span>Admin Panel</span>
+                                    <button onClick={() => (globalThis.location.href = '/admin')}
+                                        className="px-3 py-2 text-sm font-medium rounded-2xl bg-blue-100 hover:bg-blue-200 text-blue-700 transition">
+                                        Admin Panel
                                     </button>
                                 )}
 
-                                {/* Moderator Panel */}
                                 {currentRole?.roleType === 'MODERATOR' && (
-                                    <button
-                                        onClick={() => (globalThis.location.href = '/moderator')}
-                                        className="flex items-center space-x-2 px-3 py-2 text-sm font-medium rounded-2xl bg-purple-100 hover:bg-purple-200 text-purple-700 transition whitespace-nowrap"
-                                    >
+                                    <button onClick={() => (globalThis.location.href = '/moderator')}
+                                        className="flex items-center space-x-2 px-3 py-2 text-sm font-medium rounded-2xl bg-purple-100 hover:bg-purple-200 text-purple-700 transition whitespace-nowrap">
                                         <Shield className="h-4 w-4" />
                                         <span>Moderator Panel</span>
                                     </button>
                                 )}
 
-                                <button
-                                    onClick={() => (globalThis.location.href = '/roles')}
-                                    className="flex items-center space-x-2 px-3 py-2 text-sm font-medium rounded-2xl bg-gray-200 hover:bg-gray-300 text-gray-700 transition"
-                                >
+                                <button onClick={() => (globalThis.location.href = '/roles')}
+                                    className="flex items-center space-x-2 px-3 py-2 text-sm font-medium rounded-2xl bg-gray-200 hover:bg-gray-300 text-gray-700 transition">
                                     <Users className="h-4 w-4" />
                                     <span>Roles</span>
                                 </button>
 
-                                <button
-                                    onClick={logout}
-                                    className="flex items-center space-x-2 px-3 py-2 text-sm font-medium rounded-2xl bg-red-100 hover:bg-red-200 text-red-700 transition"
-                                >
+                                <button onClick={logout}
+                                    className="flex items-center space-x-2 px-3 py-2 text-sm font-medium rounded-2xl bg-red-100 hover:bg-red-200 text-red-700 transition">
                                     <LogOut className="h-4 w-4" />
                                     <span>Logout</span>
                                 </button>
@@ -566,17 +520,12 @@ const stopLocationTracking = useCallback(() => {
 
                             {/* Mobile menu button */}
                             <div className="md:hidden">
-                                <button
-                                    onClick={() => setMobileMenuOpen(prev => !prev)}
-                                    aria-label="Toggle menu"
-                                    className="p-2 rounded-lg bg-gray-200 hover:bg-gray-300 text-gray-700 transition"
-                                >
+                                <button onClick={() => setMobileMenuOpen(p => !p)} aria-label="Toggle menu"
+                                    className="p-2 rounded-lg bg-gray-200 hover:bg-gray-300 text-gray-700 transition">
                                     <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                        {mobileMenuOpen ? (
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                                        ) : (
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-                                        )}
+                                        {mobileMenuOpen
+                                            ? <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                            : <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />}
                                     </svg>
                                 </button>
                             </div>
@@ -589,7 +538,7 @@ const stopLocationTracking = useCallback(() => {
                             <div className="space-y-3 pt-3">
                                 <div className="px-2">
                                     <div className="relative">
-                                        <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-gray-500" />
+                                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-500" />
                                         <input
                                             value={searchQuery}
                                             onChange={e => setSearchQuery(e.target.value)}
@@ -598,30 +547,29 @@ const stopLocationTracking = useCallback(() => {
                                         />
                                     </div>
                                 </div>
-
                                 <div className="px-2 flex flex-col space-y-2">
                                     {isAdmin && (
-                                        <button onClick={() => (globalThis.location.href = '/admin')} className="w-full text-left px-3 py-2 rounded-lg bg-blue-100 text-blue-700">
+                                        <button onClick={() => (globalThis.location.href = '/admin')}
+                                            className="w-full text-left px-3 py-2 rounded-lg bg-blue-100 text-blue-700">
                                             Admin Panel
                                         </button>
                                     )}
                                     {currentRole?.roleType === 'MODERATOR' && (
-                                        <button
-                                            onClick={() => (globalThis.location.href = '/moderator')}
-                                            className="w-full text-left px-3 py-2 rounded-lg bg-purple-100 text-purple-700 flex items-center space-x-2"
-                                        >
+                                        <button onClick={() => (globalThis.location.href = '/moderator')}
+                                            className="w-full text-left px-3 py-2 rounded-lg bg-purple-100 text-purple-700 flex items-center space-x-2">
                                             <Shield className="h-4 w-4" />
                                             <span>Moderator Panel</span>
                                         </button>
                                     )}
-                                    <button onClick={() => (globalThis.location.href = '/roles')} className="w-full text-left px-3 py-2 rounded-lg bg-gray-100 text-gray-700">
+                                    <button onClick={() => (globalThis.location.href = '/roles')}
+                                        className="w-full text-left px-3 py-2 rounded-lg bg-gray-100 text-gray-700">
                                         Roles
                                     </button>
-                                    <button onClick={logout} className="w-full text-left px-3 py-2 rounded-lg bg-red-100 text-red-700">
+                                    <button onClick={logout}
+                                        className="w-full text-left px-3 py-2 rounded-lg bg-red-100 text-red-700">
                                         Logout
                                     </button>
                                 </div>
-
                                 <div className="px-3">
                                     <div className="flex items-center space-x-3">
                                         <div className="h-10 w-10 rounded-full bg-gray-200 flex items-center justify-center text-gray-700">
@@ -639,7 +587,7 @@ const stopLocationTracking = useCallback(() => {
                 </div>
             </header>
 
-            {/* Main Content */}
+            {/* Main */}
             <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 relative z-10">
                 <div className="bg-white rounded-2xl shadow-lg p-6 md:p-8">
                     <div className="mb-6 text-center">
@@ -648,7 +596,7 @@ const stopLocationTracking = useCallback(() => {
                         <p className="text-gray-600">Interactive campus map showing live events and activities</p>
                     </div>
 
-                    {/* Campus Bounds Warning */}
+                    {/* Out-of-bounds banner */}
                     {!isWithinCampus && boundsMessage && (
                         <div className="mb-4 p-4 bg-yellow-50 border-l-4 border-yellow-400 rounded-r-lg shadow-sm">
                             <div className="flex items-center space-x-3">
@@ -657,7 +605,7 @@ const stopLocationTracking = useCallback(() => {
                                 </svg>
                                 <div className="flex-1">
                                     <p className="text-sm font-semibold text-yellow-800">{boundsMessage}</p>
-                                    <p className="text-xs text-yellow-700 mt-1">Enable location and/or return to campus to see your position on the map</p>
+                                    <p className="text-xs text-yellow-700 mt-1">Return to campus to see your position on the map</p>
                                 </div>
                             </div>
                         </div>
@@ -665,6 +613,17 @@ const stopLocationTracking = useCallback(() => {
 
                     {/* Map */}
                     <div className="mb-8 rounded-lg overflow-hidden shadow-lg h-[50vh] sm:h-[60vh] md:h-[600px] mt-4 relative z-0">
+                        {/* Re-centre button */}
+                        {userLocation && (
+                            <button
+                                onClick={() => setRecenterMap(p => !p)}
+                                title="Centre on my location"
+                                className="absolute top-3 right-3 z-[400] bg-white rounded-lg shadow-md p-2 hover:bg-gray-100 transition border border-gray-200"
+                            >
+                                <Navigation className="h-5 w-5 text-blue-600" />
+                            </button>
+                        )}
+
                         <MapContainer
                             center={PAU_CENTER}
                             zoom={MAP_CONFIG.INITIAL_ZOOM}
@@ -673,10 +632,10 @@ const stopLocationTracking = useCallback(() => {
                             maxBounds={CAMPUS_BOUNDS}
                             maxBoundsViscosity={1}
                             style={{ height: '100%', width: '100%' }}
-                            zoomControl={true}
-                            scrollWheelZoom={true}
-                            doubleClickZoom={true}
-                            dragging={true}
+                            zoomControl
+                            scrollWheelZoom
+                            doubleClickZoom
+                            dragging
                             className="leaflet-container"
                         >
                             <TileLayer
@@ -684,12 +643,13 @@ const stopLocationTracking = useCallback(() => {
                                 url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                                 maxZoom={19}
                             />
+                            <RecenterMap position={userLocation} triggered={recenterMap} />
                             {renderEventMarkers()}
                             {renderUserLocationMarker()}
                         </MapContainer>
                     </div>
 
-                    {/* Feature Cards */}
+                    {/* Feature cards */}
                     <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
                         <div className="p-6 rounded-xl bg-gradient-to-br from-blue-50 to-white hover:scale-105 transform transition shadow-md">
                             <div className="h-14 w-14 bg-blue-600 rounded-xl flex items-center justify-center mx-auto mb-4">
@@ -698,7 +658,6 @@ const stopLocationTracking = useCallback(() => {
                             <h3 className="font-semibold text-gray-900 mb-2 text-lg text-center">Watch Events</h3>
                             <p className="text-sm text-gray-600 text-center">View live events and media streams from across campus</p>
                         </div>
-
                         <div className="p-6 rounded-xl bg-gradient-to-br from-green-50 to-white hover:scale-105 transform transition shadow-md">
                             <div className="h-14 w-14 bg-green-600 rounded-xl flex items-center justify-center mx-auto mb-4">
                                 <Camera className="h-7 w-7 text-white" />
@@ -706,7 +665,6 @@ const stopLocationTracking = useCallback(() => {
                             <h3 className="font-semibold text-gray-900 mb-2 text-lg text-center">Post Content</h3>
                             <p className="text-sm text-gray-600 text-center">Share photos and videos from live events you're attending</p>
                         </div>
-
                         <div className="p-6 rounded-xl bg-gradient-to-br from-purple-50 to-white hover:scale-105 transform transition shadow-md">
                             <div className="h-14 w-14 bg-purple-600 rounded-xl flex items-center justify-center mx-auto mb-4">
                                 <Users className="h-7 w-7 text-white" />
@@ -718,7 +676,7 @@ const stopLocationTracking = useCallback(() => {
                 </div>
             </main>
 
-            {/* Event Details Modal */}
+            {/* Event modal */}
             {showEventModal && selectedEvent && (
                 <EventDetailsModal
                     event={selectedEvent}
@@ -726,31 +684,18 @@ const stopLocationTracking = useCallback(() => {
                 />
             )}
 
-            {/* Styles */}
             <style>{`
         .leaflet-container { font-family: inherit; position: relative; z-index: 1; }
         .leaflet-control-zoom { border-radius: 8px; box-shadow: 0 4px 10px rgba(2,6,23,0.12); }
-        .custom-event-marker { background: transparent !important; border: none !important; }
+        .custom-event-marker  { background: transparent !important; border: none !important; }
         .user-location-marker { background: transparent !important; border: none !important; }
-
-        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-        .animate-pulse { animation: pulse 2s cubic-bezier(0.4,0,0.6,1) infinite; }
-
+        @keyframes pulse { 0%,100%{ opacity:1 } 50%{ opacity:.5 } }
+        .animate-pulse { animation: pulse 2s cubic-bezier(.4,0,.6,1) infinite; }
         .leaflet-popup-content { font-size: 14px; }
-        .leaflet-container { z-index: 1; }
         header { z-index: 1000; }
-
-        @media (max-width: 640px) {
-          .leaflet-container { 
-            font-size: 14px; 
-            position: relative;
-            z-index: 1;
-          }
-          header {
-            position: sticky;
-            top: 0;
-            z-index: 1000;
-          }
+        @media (max-width:640px){
+          .leaflet-container { font-size:14px; }
+          header { position:sticky; top:0; z-index:1000; }
         }
       `}</style>
         </div>

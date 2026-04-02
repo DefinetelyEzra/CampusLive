@@ -32,7 +32,7 @@ const ModeratorPanel: React.FC = () => {
     useEffect(() => {
         // Only check after we've finished loading
         if (!isChecking) {
-            if (!currentRole || currentRole.roleType !== 'MODERATOR') {
+            if (currentRole?.roleType !== 'MODERATOR') {
                 showToast('You must have an active moderator role to access this panel', 'error');
                 navigate('/roles');
             }
@@ -45,7 +45,7 @@ const ModeratorPanel: React.FC = () => {
     }
 
     // Don't render if not a moderator
-    if (!currentRole || currentRole.roleType !== 'MODERATOR') {
+    if (currentRole?.roleType !== 'MODERATOR') {
         return null;
     }
 

@@ -117,7 +117,7 @@ const EventDetailsModal: React.FC<EventDetailsModalProps> = ({ event, onClose })
 
   const validateAccessKey = (isPrivate: boolean, key: string): string | null => {
     if (!isPrivate) return null;
-    if (!key || key.length !== 6) {
+    if (key?.length !== 6) {
       return 'Please enter the access key';
     }
     if (!/^[A-Z0-9]{6}$/.test(key)) {
@@ -143,7 +143,7 @@ const EventDetailsModal: React.FC<EventDetailsModalProps> = ({ event, onClose })
       await apiService.joinEvent(
         event.id,
         currentRole.roleType,
-        userLocation || undefined,
+        userLocation ? [userLocation.latitude, userLocation.longitude] : null,
         event.isPrivate ? accessKey : undefined
       );
 
@@ -279,8 +279,8 @@ const EventDetailsModal: React.FC<EventDetailsModalProps> = ({ event, onClose })
             <button
               onClick={() => setActiveTab('details')}
               className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${activeTab === 'details'
-                  ? 'border-b-2 border-blue-600 text-blue-600 bg-white'
-                  : 'text-gray-600 hover:text-gray-900'
+                ? 'border-b-2 border-blue-600 text-blue-600 bg-white'
+                : 'text-gray-600 hover:text-gray-900'
                 }`}
             >
               Details
@@ -288,8 +288,8 @@ const EventDetailsModal: React.FC<EventDetailsModalProps> = ({ event, onClose })
             <button
               onClick={() => setActiveTab('feed')}
               className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${activeTab === 'feed'
-                  ? 'border-b-2 border-blue-600 text-blue-600 bg-white'
-                  : 'text-gray-600 hover:text-gray-900'
+                ? 'border-b-2 border-blue-600 text-blue-600 bg-white'
+                : 'text-gray-600 hover:text-gray-900'
                 }`}
             >
               Live Feed
@@ -298,8 +298,8 @@ const EventDetailsModal: React.FC<EventDetailsModalProps> = ({ event, onClose })
               <button
                 onClick={() => setActiveTab('upload')}
                 className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${activeTab === 'upload'
-                    ? 'border-b-2 border-blue-600 text-blue-600 bg-white'
-                    : 'text-gray-600 hover:text-gray-900'
+                  ? 'border-b-2 border-blue-600 text-blue-600 bg-white'
+                  : 'text-gray-600 hover:text-gray-900'
                   }`}
               >
                 <span className="flex items-center justify-center space-x-2">
@@ -479,7 +479,6 @@ const EventDetailsModal: React.FC<EventDetailsModalProps> = ({ event, onClose })
                 <MediaUploadButton
                   onFileSelect={handleMediaUpload}
                   disabled={uploading}
-                  eventId={event.id}
                   compact={false}
                 />
 
